@@ -3,4 +3,3 @@ kubernetes
 openai
 python-dotenv
 pyyaml
-requests
