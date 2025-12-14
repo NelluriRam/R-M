@@ -3,11 +3,13 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple
 
 import streamlit as st
 from dotenv import load_dotenv
+import requests
 
 from ai_support import AISupport
 from k8s_client import KubernetesManager, apply_yaml_manifest, restart_deployment
@@ -48,6 +50,52 @@ def execute_cli(command: str, kubeconfig: Optional[str], context: Optional[str])
         return completed.stdout, completed.stderr, completed.returncode
     except subprocess.TimeoutExpired:
         return "", "Command timed out", 124
+
+
+def bootstrap_kubeconfig(account: str, region: str, cluster: str, profile: str, saml_token: str) -> Optional[str]:
+    """Ensure kubeconfig for the selected account/cluster using config creds or SAML API."""
+    env = os.environ.copy()
+    if profile:
+        env["AWS_PROFILE"] = profile
+    if saml_token:
+        env["SAML_TOKEN"] = saml_token
+        saml_api_url = os.getenv("SAML_API_URL")
+        if saml_api_url:
+            try:
+                requests.post(
+                    saml_api_url,
+                    json={"account": account, "region": region, "cluster": cluster, "token": saml_token},
+                    timeout=10,
+                )
+            except requests.RequestException:
+                # non-fatal; continue with existing credentials
+                pass
+
+    script_path = Path(__file__).with_name("ekslogin-cert.sh")
+    kubeconfig_path = env.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+
+    if script_path.exists():
+        cmd = f"bash {script_path}"
+        env.update({"ACCOUNT": account, "REGION": region, "CLUSTER": cluster})
+        try:
+            completed = subprocess.run(cmd, shell=True, check=True, env=env, capture_output=True, text=True)
+            if completed.stdout:
+                st.session_state["login_log"] = completed.stdout
+            return kubeconfig_path if Path(kubeconfig_path).exists() else None
+        except subprocess.CalledProcessError as exc:  # noqa: PERF203
+            st.session_state["login_log"] = exc.stderr or str(exc)
+            return None
+
+    # Fallback to AWS CLI update-kubeconfig using shared config/credentials
+    cmd = f"aws eks update-kubeconfig --name {cluster} --region {region} --alias {cluster}"
+    try:
+        completed = subprocess.run(cmd, shell=True, check=True, env=env, capture_output=True, text=True)
+        if completed.stdout:
+            st.session_state["login_log"] = completed.stdout
+        return kubeconfig_path
+    except subprocess.CalledProcessError as exc:  # noqa: PERF203
+        st.session_state["login_log"] = exc.stderr or str(exc)
+        return None
 
 
 def render_overview(k8s: KubernetesManager, namespace: Optional[str]) -> None:
@@ -115,17 +163,25 @@ def render_login_gate(k8s: KubernetesManager) -> Optional[dict]:
     col1, col2 = st.columns([1, 1])
     with col1:
         username = st.text_input("Username", "sre-operator")
+        aws_profile = st.text_input("AWS profile (from ~/.aws/config)", "default")
     with col2:
         st.text_input("Password", type="password")
+        saml_token = st.text_input("SAML token (optional)", "")
 
     if st.button("Continue to dashboard", type="primary"):
+        kubeconfig_path = bootstrap_kubeconfig(account_choice, region, cluster, aws_profile, saml_token)
         auth_info = {
             "account": account_choice,
             "region": region,
             "cluster": cluster,
             "username": username,
+            "profile": aws_profile,
+            "kubeconfig": kubeconfig_path,
+            "saml": bool(saml_token),
         }
         st.session_state["auth_info"] = auth_info
+        if kubeconfig_path:
+            os.environ["KUBECONFIG"] = kubeconfig_path
         k8s.set_context(cluster)
         st.success("Authenticated. Loading dashboard…")
         st.experimental_rerun()
@@ -405,7 +461,7 @@ def render_header(k8s: KubernetesManager, auth_info: dict) -> Optional[str]:
     st.sidebar.markdown("---")
     st.sidebar.caption(
         f"Account: {auth_info.get('account', 'n/a').upper()} | Region: {auth_info.get('region', 'n/a')} | "
-        f"User: {k8s.active_user} | kubeconfig: {k8s.kubeconfig_path or 'default path'}"
+        f"User: {k8s.active_user} | kubeconfig: {k8s.kubeconfig_path or auth_info.get('kubeconfig') or 'default path'}"
     )
     return None if namespace_filter == "All" else namespace_filter
 
