@@ -3,17 +3,25 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Tuple
 
 import streamlit as st
 from dotenv import load_dotenv
+import requests
 
 from ai_support import AISupport
 from k8s_client import KubernetesManager, apply_yaml_manifest, restart_deployment
 from monitoring import NodeMetrics, fetch_node_metrics, fetch_pod_metrics
 
 load_dotenv()
+
+ACCOUNT_REGIONS = {
+    "plat": "us-east-1",
+    "gld": "us-east-1",
+    "silver": "us-east-2",
+}
 
 st.set_page_config(page_title="Kubernetes Portal", layout="wide")
 
@@ -42,6 +50,52 @@ def execute_cli(command: str, kubeconfig: Optional[str], context: Optional[str])
         return completed.stdout, completed.stderr, completed.returncode
     except subprocess.TimeoutExpired:
         return "", "Command timed out", 124
+
+
+def bootstrap_kubeconfig(account: str, region: str, cluster: str, profile: str, saml_token: str) -> Optional[str]:
+    """Ensure kubeconfig for the selected account/cluster using config creds or SAML API."""
+    env = os.environ.copy()
+    if profile:
+        env["AWS_PROFILE"] = profile
+    if saml_token:
+        env["SAML_TOKEN"] = saml_token
+        saml_api_url = os.getenv("SAML_API_URL")
+        if saml_api_url:
+            try:
+                requests.post(
+                    saml_api_url,
+                    json={"account": account, "region": region, "cluster": cluster, "token": saml_token},
+                    timeout=10,
+                )
+            except requests.RequestException:
+                # non-fatal; continue with existing credentials
+                pass
+
+    script_path = Path(__file__).with_name("ekslogin-cert.sh")
+    kubeconfig_path = env.get("KUBECONFIG", os.path.expanduser("~/.kube/config"))
+
+    if script_path.exists():
+        cmd = f"bash {script_path}"
+        env.update({"ACCOUNT": account, "REGION": region, "CLUSTER": cluster})
+        try:
+            completed = subprocess.run(cmd, shell=True, check=True, env=env, capture_output=True, text=True)
+            if completed.stdout:
+                st.session_state["login_log"] = completed.stdout
+            return kubeconfig_path if Path(kubeconfig_path).exists() else None
+        except subprocess.CalledProcessError as exc:  # noqa: PERF203
+            st.session_state["login_log"] = exc.stderr or str(exc)
+            return None
+
+    # Fallback to AWS CLI update-kubeconfig using shared config/credentials
+    cmd = f"aws eks update-kubeconfig --name {cluster} --region {region} --alias {cluster}"
+    try:
+        completed = subprocess.run(cmd, shell=True, check=True, env=env, capture_output=True, text=True)
+        if completed.stdout:
+            st.session_state["login_log"] = completed.stdout
+        return kubeconfig_path
+    except subprocess.CalledProcessError as exc:  # noqa: PERF203
+        st.session_state["login_log"] = exc.stderr or str(exc)
+        return None
 
 
 def render_overview(k8s: KubernetesManager, namespace: Optional[str]) -> None:
@@ -86,6 +140,72 @@ def render_overview(k8s: KubernetesManager, namespace: Optional[str]) -> None:
             use_container_width=True,
         )
 
+
+def render_login_gate(k8s: KubernetesManager) -> Optional[dict]:
+    """Show an upfront login/account selection screen before exposing the portal."""
+    st.title("Login to Kubernetes Portal")
+    st.caption(
+        "Select your account, region, and cluster to continue. Regions are pinned per account tier"
+        " (plat/gld → us-east-1, silver → us-east-2)."
+    )
+
+    shell = os.environ.get("SHELL", "")
+    msystem = os.environ.get("MSYSTEM", "")
+    gitbash_detected = "bash" in shell or "MINGW" in msystem
+    gitbash_status = "Git Bash detected" if gitbash_detected else "Git Bash not detected — launch via Git Bash for ekslogin compatibility"
+    st.info(gitbash_status)
+
+    account_choice = st.radio("Account", ["plat", "gld", "silver"], horizontal=True)
+    region = ACCOUNT_REGIONS.get(account_choice, "us-east-1")
+    st.info(f"Region automatically set to **{region}** for {account_choice.upper()} account.")
+
+    context_names = [c["name"] for c in k8s.available_contexts]
+    if not context_names:
+        st.warning("No kubeconfig contexts found; using placeholder cluster options for preview.")
+        context_names = ["eks-prod", "eks-staging", "eks-uat"]
+
+    cluster = st.selectbox("Cluster", context_names)
+
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        username = st.text_input("Username", "sre-operator")
+        aws_profile = st.text_input("AWS profile (from ~/.aws/config)", "default")
+    with col2:
+        st.text_input("Password", type="password")
+        saml_token = st.text_input("SAML token (optional)", "")
+
+    st.markdown(
+        """_This portal mirrors the `ekslogin-cert.sh` flow. If you need to run the shell directly
+        from Git Bash, the equivalent command is rendered below with the selected options._"""
+    )
+    st.code(
+        f"ACCOUNT={account_choice} REGION={region} CLUSTER={cluster} AWS_PROFILE={aws_profile} bash ekslogin-cert.sh",
+        language="bash",
+    )
+
+    if st.button("Continue to dashboard", type="primary"):
+        kubeconfig_path = bootstrap_kubeconfig(account_choice, region, cluster, aws_profile, saml_token)
+        auth_info = {
+            "account": account_choice,
+            "region": region,
+            "cluster": cluster,
+            "username": username,
+            "profile": aws_profile,
+            "kubeconfig": kubeconfig_path,
+            "saml": bool(saml_token),
+        }
+        st.session_state["auth_info"] = auth_info
+        if kubeconfig_path:
+            os.environ["KUBECONFIG"] = kubeconfig_path
+        k8s.set_context(cluster)
+        st.success("Authenticated. Loading dashboard…")
+        st.experimental_rerun()
+
+    if st.session_state.get("login_log"):
+        with st.expander("Show ekslogin-cert.sh output"):
+            st.code(st.session_state["login_log"], language="bash")
+
+    return st.session_state.get("auth_info")
 
 
 def render_pods(k8s: KubernetesManager, namespace: Optional[str]) -> None:
@@ -340,23 +460,39 @@ def render_ai(k8s: KubernetesManager, namespace: Optional[str]) -> None:
 
 
 
-def render_header(k8s: KubernetesManager) -> Optional[str]:
+def render_header(k8s: KubernetesManager, auth_info: dict) -> Optional[str]:
     contexts = k8s.available_contexts
     context_names = [c["name"] for c in contexts]
-    selected_context = st.sidebar.selectbox("Context", context_names)
-    k8s.set_context(selected_context)
+    default_context = auth_info.get("cluster") if auth_info else None
+
+    if default_context and default_context in context_names:
+        default_index = context_names.index(default_context)
+    else:
+        default_index = 0
+
+    selected_context = st.sidebar.selectbox("Cluster", context_names or [default_context], index=default_index)
+    if selected_context:
+        k8s.set_context(selected_context)
 
     namespaces = k8s.list_namespaces()
     namespace_names = [n.metadata.name for n in namespaces]
     namespace_filter = st.sidebar.selectbox("Namespace", ["All"] + namespace_names)
     st.sidebar.markdown("---")
     st.sidebar.caption(
-        f"User: {k8s.active_user} | Context: {selected_context} | kubeconfig: {k8s.kubeconfig_path or 'default path'}"
+        f"Account: {auth_info.get('account', 'n/a').upper()} | Region: {auth_info.get('region', 'n/a')} | "
+        f"User: {k8s.active_user} | kubeconfig: {k8s.kubeconfig_path or auth_info.get('kubeconfig') or 'default path'}"
     )
     return None if namespace_filter == "All" else namespace_filter
 
 
 if __name__ == "__main__":
+    k8s_manager = get_k8s_manager()
+    auth_info = st.session_state.get("auth_info") or render_login_gate(k8s_manager)
+    if not auth_info:
+        st.stop()
+
+    k8s_manager.set_context(auth_info.get("cluster"))
+
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "",
@@ -372,13 +508,12 @@ if __name__ == "__main__":
         ],
         index=0,
     )
-    k8s_manager = get_k8s_manager()
     if k8s_manager.connection_warning or k8s_manager.dummy_mode:
         st.sidebar.warning(
             k8s_manager.connection_warning
             or "No kubeconfig detected. Connect a kubeconfig file to enable live data."
         )
-    namespace = render_header(k8s_manager)
+    namespace = render_header(k8s_manager, auth_info)
 
     if page == "Overview":
         render_overview(k8s_manager, namespace)
