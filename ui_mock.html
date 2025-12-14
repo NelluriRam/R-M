@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kubernetes Portal Preview</title>
+  <style>
+    :root {
+      --bg: #0b1221;
+      --card: #131c2f;
+      --card-accent: #17243d;
+      --text: #e8edf7;
+      --muted: #aab6d6;
+      --accent: #6ac6ff;
+      --success: #62d39f;
+      --warning: #f0c75e;
+      --danger: #ef6b7b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Inter", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(circle at 10% 20%, #0f1a32 0%, #050914 50%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px;
+    }
+    .app-shell {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    aside {
+      background: #0d1426;
+      padding: 20px 16px;
+      border-right: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .pill {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      padding: 6px 10px;
+      border-radius: 14px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .section-title {
+      font-size: 12px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .nav, .filters {
+      display: grid;
+      gap: 8px;
+    }
+    .nav button, .filters select, .filters button {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.05);
+      background: var(--card);
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-size: 14px;
+    }
+    .nav button:hover, .filters button:hover {
+      border-color: rgba(255,255,255,0.2);
+    }
+    .nav .active {
+      background: linear-gradient(120deg, rgba(106,198,255,0.2), rgba(98,211,159,0.16));
+      border-color: rgba(106,198,255,0.4);
+    }
+    main {
+      padding: 26px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,0.04);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+    }
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 6px 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .healthy { background: var(--success); }
+    .warn { background: var(--warning); }
+    .bad { background: var(--danger); }
+    .chart {
+      height: 120px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.06), transparent);
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.05);
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: 2fr 1.3fr;
+      gap: 16px;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+    .item {
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: var(--card-accent);
+      border: 1px solid rgba(255,255,255,0.05);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--text);
+    }
+    .item small { color: var(--muted); }
+    .badge {
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .terminal {
+      background: #050910;
+      font-family: "SFMono-Regular", Menlo, Consolas, monospace;
+      color: #9ae6b4;
+      padding: 14px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      min-height: 180px;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.4);
+    }
+    .ai-panel {
+      background: linear-gradient(135deg, rgba(106,198,255,0.08), rgba(98,211,159,0.06));
+      border: 1px solid rgba(106,198,255,0.3);
+      color: var(--text);
+    }
+    .login-screen {
+      background: linear-gradient(135deg, rgba(42,72,120,0.45), rgba(14,31,62,0.9));
+      border: 1px solid rgba(255,255,255,0.05);
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    }
+    .login-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+    .login-card {
+      background: var(--card);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 12px;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .login-card h3 { margin: 0; }
+    .account-badge { font-weight: 600; }
+    .region-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(106,198,255,0.12);
+      border: 1px solid rgba(106,198,255,0.35);
+      color: var(--text);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <section class="login-screen">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div>
+        <div class="pill">Step 1</div>
+        <h2 style="margin:6px 0 4px;">Login &amp; choose your account</h2>
+        <p style="margin:0;color:var(--muted);max-width:680px;">Pick the right account tier and the portal automatically pins the correct AWS region (plat/gld → us-east-1, silver → us-east-2). Select the EKS cluster, then continue to the dashboard.</p>
+      </div>
+      <button style="padding:12px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);background:#1f2c46;color:var(--text);cursor:pointer;">Continue to dashboard →</button>
+    </div>
+    <div class="login-grid" style="margin-top:12px;">
+      <div class="login-card">
+        <div class="section-title">Accounts</div>
+        <div class="status-row" style="justify-content:space-between;">
+          <span class="account-badge">plat</span>
+          <span class="region-pill"><strong>Region</strong> us-east-1</span>
+        </div>
+        <div class="status-row" style="justify-content:space-between;">
+          <span class="account-badge">gld</span>
+          <span class="region-pill"><strong>Region</strong> us-east-1</span>
+        </div>
+        <div class="status-row" style="justify-content:space-between;">
+          <span class="account-badge">silver</span>
+          <span class="region-pill"><strong>Region</strong> us-east-2</span>
+        </div>
+      </div>
+      <div class="login-card">
+        <div class="section-title">Cluster</div>
+        <div class="status-row" style="justify-content:space-between;">
+          <span>Selected</span>
+          <span class="badge">eks-prod</span>
+        </div>
+        <div class="status-row" style="justify-content:space-between;">
+          <span>Namespace filter</span>
+          <span class="badge">uat</span>
+        </div>
+        <div class="status-row" style="justify-content:space-between;">
+          <span>User</span>
+          <span class="badge">sre-operator</span>
+        </div>
+      </div>
+      <div class="login-card">
+        <div class="section-title">Credentials</div>
+        <div class="status-row"><span class="status-dot healthy"></span>SSO session active</div>
+        <div class="status-row"><span class="status-dot healthy"></span>Using AWS config profile: <strong>default</strong></div>
+        <div class="status-row"><span class="status-dot healthy"></span>SAML token sent to samlapi for cert-based kubeconfig</div>
+        <div class="status-row"><span class="status-dot healthy"></span>Kubeconfig ready</div>
+        <div class="status-row"><span class="status-dot warn"></span>AI key required for copilot</div>
+        <div class="status-row"><span class="status-dot healthy"></span>Launch via Git Bash to mirror ekslogin-cert.sh flow</div>
+        <div class="status-row" style="flex-direction:column;align-items:flex-start;gap:6px;">
+          <small style="color:var(--muted);">Command preview</small>
+          <code style="background:rgba(255,255,255,0.04);padding:8px 10px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);width:100%;white-space:pre-wrap;">ACCOUNT=plat REGION=us-east-1 CLUSTER=eks-prod AWS_PROFILE=default bash ekslogin-cert.sh</code>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="app-shell">
+  <aside>
+    <div class="logo">
+      <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6ac6ff,#62d39f);"></div>
+      <span>Kube Portal</span>
+    </div>
+    <div>
+      <div class="section-title">Context</div>
+      <div class="pill">Account: gld • Region: us-east-1 • Cluster: eks-prod</div>
+    </div>
+    <div class="filters">
+      <div class="section-title">Filters</div>
+      <select>
+        <option>Namespace: production</option>
+        <option>Namespace: staging</option>
+        <option>Namespace: uat</option>
+      </select>
+      <select>
+        <option>Cluster: eks-prod</option>
+        <option>Cluster: eks-staging</option>
+      </select>
+      <button>Switch Namespace</button>
+    </div>
+    <div>
+      <div class="section-title">Navigation</div>
+      <div class="nav">
+        <button class="active">Overview</button>
+        <button>Workloads</button>
+        <button>Nodes &amp; Compute</button>
+        <button>Logs &amp; Terminal</button>
+        <button>YAML Editor</button>
+        <button>Helm Releases</button>
+        <button>Port Forwarding</button>
+        <button>AI Copilot</button>
+      </div>
+    </div>
+    <div>
+      <div class="section-title">RBAC &amp; Access</div>
+      <div class="pill">User: sre-operator • Role: cluster-admin</div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="grid">
+      <div class="card">
+        <h3>Cluster Health</h3>
+        <div class="status-row"><span class="status-dot healthy"></span>API Server: Healthy</div>
+        <div class="status-row"><span class="status-dot healthy"></span>Scheduler: Healthy</div>
+        <div class="status-row"><span class="status-dot warn"></span>Karpenter: Degraded (1 node pending)</div>
+      </div>
+      <div class="card">
+        <h3>Namespace Summary</h3>
+        <div class="status-row">Pods: 142 running / 4 pending</div>
+        <div class="status-row">Deployments: 68 ready / 2 updating</div>
+        <div class="status-row">Services: 52 (8 LoadBalancer)</div>
+      </div>
+      <div class="card">
+        <h3>Alerts</h3>
+        <div class="status-row"><span class="status-dot warn"></span>High CPU on node ip-10-0-12-5</div>
+        <div class="status-row"><span class="status-dot bad"></span>CrashLoop: billing-api-7f4c in uat</div>
+      </div>
+      <div class="card">
+        <h3>Quick Actions</h3>
+        <div class="status-row">Restart deployment • production/payment-api</div>
+        <div class="status-row">Port forward • reporting-ui:443 → localhost:9443</div>
+      </div>
+    </div>
+
+    <div class="split">
+      <div class="card">
+        <h3>Node Compute Usage</h3>
+        <div class="chart">CPU / Memory / Network graphs</div>
+        <div class="list">
+          <div class="item">
+            <div>
+              <strong>ip-10-0-12-5</strong><br>
+              <small>m5.2xlarge • us-east-1a</small>
+            </div>
+            <span class="badge" style="color:var(--warning);border-color:var(--warning);">78% CPU</span>
+          </div>
+          <div class="item">
+            <div>
+              <strong>ip-10-0-9-18</strong><br>
+              <small>m5.2xlarge • us-east-1b</small>
+            </div>
+            <span class="badge" style="color:var(--success);border-color:var(--success);">41% CPU</span>
+          </div>
+          <div class="item">
+            <div>
+              <strong>ip-10-0-7-3</strong><br>
+              <small>karpenter • spot</small>
+            </div>
+            <span class="badge" style="color:var(--accent);border-color:var(--accent);">Karpenter Pending</span>
+          </div>
+        </div>
+      </div>
+      <div class="card ai-panel">
+        <h3>AI Copilot</h3>
+        <p style="margin-top:0;color:#d8eaff">"Need to restart nlpbenefits in uat"</p>
+        <div class="status-row"><span class="status-dot healthy"></span>Action parsed: Deployment restart</div>
+        <div class="status-row"><span class="status-dot healthy"></span>kubectl rollout restart deployment/nlpbenefits -n uat</div>
+        <div class="status-row"><span class="status-dot warn"></span>Analyzing logs for root cause…</div>
+        <div class="status-row"><span class="status-dot healthy"></span>Suggested fix: Increase readiness timeout to 20s</div>
+      </div>
+    </div>
+
+    <div class="split">
+      <div class="card">
+        <h3>Pod Logs</h3>
+        <div class="terminal">
+          $ kubectl logs billing-api-7f4c -n uat -f<br>
+          12:03:10  connecting to aurora<br>
+          12:03:11  timeout reached; retrying<br>
+          12:03:12  connection established<br>
+          12:03:13  error: auth token expired<br>
+          12:03:15  restarting...
+        </div>
+      </div>
+      <div class="card">
+        <h3>YAML Editor</h3>
+        <div class="terminal" style="color:#d9e7ff;background:#0b1424;">
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing-api
+spec:
+  replicas: 4  # edited live
+  template:
+    spec:
+      containers:
+      - name: billing-api
+        image: ghcr.io/org/billing:2.3.1
+        resources:
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+        </div>
+      </div>
+    </div>
+  </main>
+  </div>
+</body>
+</html>
